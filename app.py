@@ -21,73 +21,6 @@ try:
 except ImportError:
     pass
 
-import sys
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from core.models import ProjectContext, IntakeState
-from core.chat_agent import process_message
-
-# ── Logging: console + rotating FILE, so production (Windows service / IIS)
-#    has a readable log even when there is no console attached. ──────────────
-LOG_DIR = Path(__file__).parent.parent / "logs"
-LOG_DIR.mkdir(exist_ok=True)
-LOG_FILE = LOG_DIR / "ai_reporting.log"
-
-_fmt = logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s')
-
-from logging.handlers import RotatingFileHandler
-_file_handler = RotatingFileHandler(
-    LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8")
-_file_handler.setFormatter(_fmt)
-
-_console = logging.StreamHandler()
-_console.setFormatter(_fmt)
-
-logging.basicConfig(level=logging.INFO, handlers=[_file_handler, _console])
-logger = logging.getLogger(__name__)
-
-
-def _api_key_status() -> dict:
-    """
-    Report whether the Anthropic key is usable — WITHOUT ever logging the key.
-    Only a masked prefix/suffix is shown so you can tell WHICH key is loaded.
-    """
-    key = os.getenv("ANTHROPIC_API_KEY", "") or ""
-    key = key.strip()
-    if not key:
-        return {"configured": False, "reason": "ANTHROPIC_API_KEY is empty or not set",
-                "masked": None, "length": 0}
-    looks_valid = key.startswith("sk-")
-    return {
-        "configured": True,
-        "reason": "ok" if looks_valid else "value present but does not start with 'sk-'",
-        "masked": f"{key[:8]}...{key[-4:]}",
-        "length": len(key),
-    }
-
-
-def _log_startup_diagnostics():
-    st = _api_key_status()
-    logger.info("=" * 60)
-    logger.info("AI Reporting API starting")
-    logger.info("Log file: %s", LOG_FILE)
-    logger.info("Working directory: %s", os.getcwd())
-    logger.info(".env expected at: %s (exists=%s)",
-                Path.cwd() / ".env", (Path.cwd() / ".env").exists())
-    if st["configured"]:
-        logger.info("ANTHROPIC_API_KEY: LOADED  key=%s  length=%d  (%s)",
-                    st["masked"], st["length"], st["reason"])
-    else:
-        logger.error("ANTHROPIC_API_KEY: *** NOT SET *** — AI features will fall "
-                     "back to stubs (you will get only 1 measure and default visuals)")
-    logger.info("=" * 60)
-
-
-_log_startup_diagnostics()
-
-
-
-
 # Add parent to path so core imports work
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -349,7 +282,8 @@ def download_powerbi(session_id: str):
             from core.pbi_exporter import export_powerbi_package
             from core.chat_agent import _get_all_dfs
             file_paths = getattr(ctx, 'file_paths', {})
-            pbi_zip = export_powerbi_package(ctx.semantic_model, _get_all_dfs(ctx), file_paths)
+            user_requests = getattr(ctx, 'protocol_text', '') or ''
+            pbi_zip = export_powerbi_package(ctx.semantic_model, _get_all_dfs(ctx), file_paths, user_requests=user_requests)
             ctx.pbi_zip = pbi_zip
             SESSIONS[session_id] = ctx
         except Exception as exc:
