@@ -28,11 +28,63 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from core.models import ProjectContext, IntakeState
 from core.chat_agent import process_message
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s %(levelname)s %(name)s: %(message)s'
-)
+# ── Logging: console + rotating FILE, so production (Windows service / IIS)
+#    has a readable log even when there is no console attached. ──────────────
+LOG_DIR = Path(__file__).parent.parent / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+LOG_FILE = LOG_DIR / "ai_reporting.log"
+
+_fmt = logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s')
+
+from logging.handlers import RotatingFileHandler
+_file_handler = RotatingFileHandler(
+    LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8")
+_file_handler.setFormatter(_fmt)
+
+_console = logging.StreamHandler()
+_console.setFormatter(_fmt)
+
+logging.basicConfig(level=logging.INFO, handlers=[_file_handler, _console])
 logger = logging.getLogger(__name__)
+
+
+def _api_key_status() -> dict:
+    """
+    Report whether the Anthropic key is usable — WITHOUT ever logging the key.
+    Only a masked prefix/suffix is shown so you can tell WHICH key is loaded.
+    """
+    key = os.getenv("ANTHROPIC_API_KEY", "") or ""
+    key = key.strip()
+    if not key:
+        return {"configured": False, "reason": "ANTHROPIC_API_KEY is empty or not set",
+                "masked": None, "length": 0}
+    looks_valid = key.startswith("sk-")
+    return {
+        "configured": True,
+        "reason": "ok" if looks_valid else "value present but does not start with 'sk-'",
+        "masked": f"{key[:8]}...{key[-4:]}",
+        "length": len(key),
+    }
+
+
+def _log_startup_diagnostics():
+    st = _api_key_status()
+    logger.info("=" * 60)
+    logger.info("AI Reporting API starting")
+    logger.info("Log file: %s", LOG_FILE)
+    logger.info("Working directory: %s", os.getcwd())
+    logger.info(".env expected at: %s (exists=%s)",
+                Path.cwd() / ".env", (Path.cwd() / ".env").exists())
+    if st["configured"]:
+        logger.info("ANTHROPIC_API_KEY: LOADED  key=%s  length=%d  (%s)",
+                    st["masked"], st["length"], st["reason"])
+    else:
+        logger.error("ANTHROPIC_API_KEY: *** NOT SET *** — AI features will fall "
+                     "back to stubs (you will get only 1 measure and default visuals)")
+    logger.info("=" * 60)
+
+
+_log_startup_diagnostics()
 
 app = Flask(__name__)
 CORS(app)
@@ -139,6 +191,17 @@ def chat(session_id: str):
                 saved_path.write_bytes(content)
                 logger.info("File saved: %s (%d bytes) → %s",
                             fname, len(content), saved_path)
+
+                # Key status at upload time — this is the moment that decides
+                # whether measure extraction will be real or a 1-measure stub.
+                _st = _api_key_status()
+                if _st["configured"]:
+                    logger.info("UPLOAD [%s]: API key present (%s) — AI extraction WILL run",
+                                fname, _st["masked"])
+                else:
+                    logger.error("UPLOAD [%s]: API KEY MISSING — extraction will fall back "
+                                 "to stub (expect only 1 measure!). %s",
+                                 fname, _st["reason"])
 
                 # Pass both content (for profiling) and saved path (for BIM)
                 attached_file = (fname, content, str(saved_path))
@@ -305,10 +368,43 @@ def download_powerbi(session_id: str):
 
 @app.route('/api/health', methods=['GET'])
 def health():
-    api_key_set = bool(os.getenv('ANTHROPIC_API_KEY'))
+    """
+    PUBLIC health probe — deliberately minimal.
+
+    SECURITY: this endpoint is unauthenticated, so it must NOT reveal any
+    configuration: no key status, no file paths, no working directory, no
+    session counts. Those details are written to the log file at startup
+    instead, where only server admins can see them.
+    """
+    return jsonify({'status': 'ok'})
+
+
+@app.route('/api/diagnostics', methods=['GET'])
+def diagnostics():
+    """
+    ADMIN-ONLY diagnostics. Returns the detail that used to be on /api/health.
+
+    Protected by a shared secret: the caller must send
+        X-Diagnostics-Token: <value of DIAGNOSTICS_TOKEN>
+    If DIAGNOSTICS_TOKEN is not configured, the endpoint is disabled entirely
+    (fail closed) so it can never be left open by accident.
+    """
+    expected = os.getenv('DIAGNOSTICS_TOKEN', '')
+    supplied = request.headers.get('X-Diagnostics-Token', '')
+    if not expected or not supplied or supplied != expected:
+        logger.warning("Rejected /api/diagnostics request from %s", request.remote_addr)
+        return jsonify({'error': 'Not found'}), 404      # 404, not 403 — don't confirm it exists
+
+    st = _api_key_status()
     return jsonify({
         'status': 'ok',
-        'api_key_configured': api_key_set,
+        'api_key_configured': st['configured'],
+        'api_key_masked': st['masked'],
+        'api_key_length': st['length'],
+        'api_key_note': st['reason'],
+        'log_file': str(LOG_FILE),
+        'working_directory': os.getcwd(),
+        'dotenv_found': (Path.cwd() / ".env").exists(),
         'active_sessions': len(SESSIONS),
         'timestamp': datetime.now().isoformat(),
     })
@@ -316,6 +412,17 @@ def health():
 
 @app.route('/api/sessions', methods=['GET'])
 def list_sessions():
+    """
+    ADMIN-ONLY. This lists every active session id and its uploaded file names,
+    which would otherwise let anyone enumerate sessions and then download other
+    users' exports. Requires the same X-Diagnostics-Token header.
+    """
+    expected = os.getenv('DIAGNOSTICS_TOKEN', '')
+    supplied = request.headers.get('X-Diagnostics-Token', '')
+    if not expected or not supplied or supplied != expected:
+        logger.warning("Rejected /api/sessions request from %s", request.remote_addr)
+        return jsonify({'error': 'Not found'}), 404
+
     return jsonify({
         'sessions': [
             {'session_id': sid, **_ctx_summary(ctx)}
