@@ -50,20 +50,15 @@ logger = logging.getLogger(__name__)
 
 def _api_key_status() -> dict:
     """
-    Report whether the Anthropic key is usable — WITHOUT ever logging the key.
-    Only a masked prefix/suffix is shown so you can tell WHICH key is loaded.
+    Report ONLY whether an LLM credential is configured — never any part of it.
+
+    SECURITY: deliberately returns no key characters and no length, so nothing
+    derived from the secret can leak into a response or a log line.
     """
-    key = os.getenv("ANTHROPIC_API_KEY", "") or ""
-    key = key.strip()
-    if not key:
-        return {"configured": False, "reason": "ANTHROPIC_API_KEY is empty or not set",
-                "masked": None, "length": 0}
-    looks_valid = key.startswith("sk-")
+    key = (os.getenv("ANTHROPIC_API_KEY", "") or "").strip()
     return {
-        "configured": True,
-        "reason": "ok" if looks_valid else "value present but does not start with 'sk-'",
-        "masked": f"{key[:8]}...{key[-4:]}",
-        "length": len(key),
+        "configured": bool(key),
+        "reason": "ok" if key else "ANTHROPIC_API_KEY is empty or not set",
     }
 
 
@@ -76,8 +71,7 @@ def _log_startup_diagnostics():
     logger.info(".env expected at: %s (exists=%s)",
                 Path.cwd() / ".env", (Path.cwd() / ".env").exists())
     if st["configured"]:
-        logger.info("ANTHROPIC_API_KEY: LOADED  key=%s  length=%d  (%s)",
-                    st["masked"], st["length"], st["reason"])
+        logger.info("ANTHROPIC_API_KEY: LOADED")
     else:
         logger.error("ANTHROPIC_API_KEY: *** NOT SET *** — AI features will fall "
                      "back to stubs (you will get only 1 measure and default visuals)")
@@ -196,8 +190,7 @@ def chat(session_id: str):
                 # whether measure extraction will be real or a 1-measure stub.
                 _st = _api_key_status()
                 if _st["configured"]:
-                    logger.info("UPLOAD [%s]: API key present (%s) — AI extraction WILL run",
-                                fname, _st["masked"])
+                    logger.info("UPLOAD [%s]: API key present — AI extraction WILL run", fname)
                 else:
                     logger.error("UPLOAD [%s]: API KEY MISSING — extraction will fall back "
                                  "to stub (expect only 1 measure!). %s",
@@ -399,9 +392,6 @@ def diagnostics():
     return jsonify({
         'status': 'ok',
         'api_key_configured': st['configured'],
-        'api_key_masked': st['masked'],
-        'api_key_length': st['length'],
-        'api_key_note': st['reason'],
         'log_file': str(LOG_FILE),
         'working_directory': os.getcwd(),
         'dotenv_found': (Path.cwd() / ".env").exists(),
