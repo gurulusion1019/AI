@@ -143,7 +143,7 @@ function renderMarkdown(text, onOptionClick) {
       const isRec  = label.toLowerCase().includes("recommended");
       elements.push(
         <button key={key++}
-          onClick={() => onOptionClick?.(letter)}
+          onClick={() => { if (onOptionClick) onOptionClick(letter); }}
           style={{
             display:"flex", alignItems:"center", gap:10, width:"100%",
             textAlign:"left", margin:"5px 0", padding:"9px 12px",
@@ -396,7 +396,8 @@ function DownloadPanel({ sessionId }) {
 function ContextPanel({ ctx }) {
   if (!ctx) return null;
   const items = [
-    { label:"Tables",   value:(ctx.raw_files?.length||0)+(ctx.mapping_files?.length||0) },
+    { label:"Tables",   value:((ctx.raw_files && ctx.raw_files.length) || 0) +
+                          ((ctx.mapping_files && ctx.mapping_files.length) || 0) },
     { label:"Measures", value:ctx.measures_count||0 },
     { label:"Mappings", value:ctx.mappings_count||0 },
     { label:"Open issues", value:ctx.errors_pending||0, warn:(ctx.errors_pending||0)>0 },
@@ -481,7 +482,9 @@ export default function App() {
   const fileInputRef = useRef(null);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior:"smooth" });
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior:"smooth" });
+    }
   }, [messages, loading]);
 
   const addMsg = (role, content, extra={}) =>
@@ -697,7 +700,7 @@ export default function App() {
           border:"1px solid rgba(255,255,255,0.15)",
           borderRadius:6, padding:"4px 10px"
         }}>
-          {ctx?.project_name || "New project"}
+          {(ctx && ctx.project_name) || "New project"}
         </div>
       </header>
 
@@ -783,7 +786,7 @@ export default function App() {
               accept=".csv,.xlsx,.xls,.txt,.md,.pdf,.docx,.json"
               onChange={handleFileSelect} style={{ display:"none"}}/>
             <button
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => { if (fileInputRef.current) fileInputRef.current.click(); }}
               disabled={loading}
               title="Attach data files"
               style={{
@@ -861,7 +864,7 @@ export default function App() {
             <div style={{
               fontSize:10, color:T.textFaint, fontFamily:T.mono,
               wordBreak:"break-all"
-            }}>{sessionId?.slice(0,18)}…</div>
+            }}>{sessionId ? sessionId.slice(0,18) : ""}…</div>
           </div>
         </aside>
       </div>
