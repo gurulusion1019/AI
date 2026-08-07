@@ -1,0 +1,48 @@
+DASHBOARD VISUALS	(Plain-English visual requests — edit these to control the dashboard the AI builds)
+	100% stacked bar of Gross Profit by Channel split by Return Reason
+	Ribbon chart of Total Net Revenue by Channel split by Return Reason
+	Treemap of Total Units Sold by Channel
+	Funnel of Total Orders by Return Reason
+	Slicers for Channel and Month
+	Table of Channel, Total Net Revenue, Total Orders and Gross Profit
+	Matrix of Total Gross Revenue and Gross Profit by Channel
+	Line chart of Total Net Revenue over time
+	Slicers for Channel and Month
+
+Run 1 — funnel, gauge, KPI, stacked
+
+Show Total Gross Revenue, Total Net Revenue, Total Orders, and Total Units Sold as KPI cards
+Funnel of Total Orders by Channel
+Gauge of Gross Profit
+KPI of Total Net Revenue with trend over time
+Stacked bar of Total Net Revenue by Channel
+Stacked column of Gross Profit by Channel
+Combo chart of Total Net Revenue by Channel
+Slicers for Channel and Month
+
+Run 2 — series-based and map
+
+Show Total Gross Revenue and Total Net Revenue as KPI cards
+100% stacked bar of Gross Profit by Channel split by Return Reason
+Ribbon chart of Total Net Revenue by Channel split by Return Reason
+Treemap of Total Units Sold by Channel
+Funnel of Total Orders by Return Reason
+Slicers for Channel and Month
+
+Run 3 — table and matrix (these take two grid slots each, so keep the rest light)
+
+Show Total Gross Revenue and Total Orders as KPI cards
+Table of Channel, Total Net Revenue, Total Orders and Gross Profit
+Matrix of Total Gross Revenue and Gross Profit by Channel
+Line chart of Total Net Revenue over time
+Slicers for Channel and Month
+
+Show Total Gross Revenue, Total Net Revenue, Total Orders, and Total Units Sold as KPI cards
+Bar chart of Total Net Revenue by Channel
+Column chart of Gross Profit by Channel
+Area chart of Total Net Revenue over time
+Pie of Total Orders by Return Reason
+Treemap of Total Units Sold by Channel
+Scatter of Total Net Revenue vs Gross Profit by Channel
+Slicers for Channel and Month
+
