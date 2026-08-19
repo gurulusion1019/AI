@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect } from "react";
 
 const API = "http://localhost:5000/api";
 
@@ -62,6 +62,15 @@ const STATE_ACTIVITY = {
 const STEP_ORDER = [
   "PROJECT_INIT","RAW_DATA","MAPPING_FILES","PROTOCOL",
   "CLARIFY","MAPPING_REVIEW","ERROR_REVIEW","MODEL_BUILD","EXPORT","COMPLETE"
+];
+
+/* Practical constraints shown on the landing page, so users know what to
+   prepare and how their data is handled before they upload anything. */
+const FACTS = [
+  { k:"Formats",  v:"Excel (.xlsx, .xls), CSV, Word, PDF, TXT, JSON" },
+  { k:"Limits",   v:"Up to 100 MB per file. Source files ship with the project, so row counts aren\u2019t capped \u2014 only embedded fallback tables are limited to 10,000 rows" },
+  { k:"Output",   v:"Power BI project (.pbip), Excel workbook, TMDL JSON, audit log, PDF summary" },
+  { k:"Security", v:"Files stay within Accenture\u2019s environment. Only column names and statistics are sent to the model \u2014 never your data rows" },
 ];
 
 function formatBytes(bytes) {
@@ -234,31 +243,68 @@ function FilePreviewCard({ file, uploaded }) {
    scrolls out of view. During a long model build the user can see
    exactly where the agent is.
    ───────────────────────────────────────────────────────────── */
-function PipelineRail({ state }) {
+function PipelineRail({ state, collapsed, onToggle }) {
   const idx = STEP_ORDER.indexOf(state);
+  const W = collapsed ? 56 : 196;
+
   return (
     <nav aria-label="Build progress" style={{
-      width:196, flexShrink:0, background:T.ink,
-      padding:"18px 0", overflowY:"auto"
+      width:W, flexShrink:0, background:T.ink,
+      padding:"14px 0", overflowY:"auto", overflowX:"hidden",
+      transition:"width .18s ease",
+      display:"flex", flexDirection:"column"
     }}>
+      {/* Header row: label + collapse toggle */}
       <div style={{
-        fontSize:9.5, letterSpacing:"0.14em", textTransform:"uppercase",
-        color:"rgba(255,255,255,0.4)", fontFamily:T.mono,
-        padding:"0 18px 12px"
-      }}>Pipeline</div>
+        display:"flex", alignItems:"center",
+        justifyContent: collapsed ? "center" : "space-between",
+        padding: collapsed ? "0 0 12px" : "0 12px 12px 18px"
+      }}>
+        {!collapsed && (
+          <span style={{
+            fontSize:9.5, letterSpacing:"0.14em", textTransform:"uppercase",
+            color:"rgba(255,255,255,0.4)", fontFamily:T.mono
+          }}>Pipeline</span>
+        )}
+        <button
+          onClick={onToggle}
+          aria-label={collapsed ? "Expand pipeline" : "Collapse pipeline"}
+          title={collapsed ? "Expand" : "Collapse"}
+          style={{
+            width:26, height:26, borderRadius:6, flexShrink:0,
+            background:"transparent", border:"1px solid rgba(255,255,255,0.15)",
+            color:"rgba(255,255,255,0.55)", cursor:"pointer",
+            fontSize:12, lineHeight:1, fontFamily:T.mono,
+            display:"flex", alignItems:"center", justifyContent:"center",
+            transition:"border-color .12s, color .12s"
+          }}
+          onMouseEnter={ev => {
+            ev.currentTarget.style.borderColor = T.purple;
+            ev.currentTarget.style.color = "#fff";
+          }}
+          onMouseLeave={ev => {
+            ev.currentTarget.style.borderColor = "rgba(255,255,255,0.15)";
+            ev.currentTarget.style.color = "rgba(255,255,255,0.55)";
+          }}
+        >{collapsed ? "»" : "«"}</button>
+      </div>
 
       {STEP_ORDER.map((s, i) => {
         const done   = i < idx;
         const active = i === idx;
         return (
-          <div key={s} style={{
-            display:"flex", alignItems:"center", gap:11,
-            padding:"9px 18px", position:"relative",
-            background: active ? "rgba(161,0,255,0.16)" : "transparent",
-            borderLeft: `2px solid ${active ? T.purple : "transparent"}`
-          }}>
-            {/* connector line between markers */}
-            {i < STEP_ORDER.length - 1 && (
+          <div key={s}
+            title={collapsed ? STATE_LABELS[s] : undefined}
+            style={{
+              display:"flex", alignItems:"center", gap:11,
+              padding: collapsed ? "9px 0" : "9px 18px",
+              justifyContent: collapsed ? "center" : "flex-start",
+              position:"relative",
+              background: active ? "rgba(161,0,255,0.16)" : "transparent",
+              borderLeft: `2px solid ${active ? T.purple : "transparent"}`
+            }}>
+            {/* connector line between markers (full mode only) */}
+            {!collapsed && i < STEP_ORDER.length - 1 && (
               <span style={{
                 position:"absolute", left:26, top:"50%", width:1, height:"100%",
                 background: done ? "rgba(0,147,124,0.5)" : "rgba(255,255,255,0.1)"
@@ -273,14 +319,16 @@ function PipelineRail({ state }) {
                 ? "none" : "1px solid rgba(255,255,255,0.22)",
               color: done || active ? "#fff" : "rgba(255,255,255,0.35)",
               boxShadow: active ? `0 0 0 4px rgba(161,0,255,0.22)` : "none"
-            }}>{done ? "✓" : i + 1}</span>
-            <span style={{
-              fontSize:11.5, lineHeight:1.3,
-              color: active ? "#fff"
-                   : done ? "rgba(255,255,255,0.62)"
-                   : "rgba(255,255,255,0.34)",
-              fontWeight: active ? 600 : 400
-            }}>{STATE_LABELS[s]}</span>
+            }}>{done ? "\u2713" : i + 1}</span>
+            {!collapsed && (
+              <span style={{
+                fontSize:11.5, lineHeight:1.3,
+                color: active ? "#fff"
+                     : done ? "rgba(255,255,255,0.62)"
+                     : "rgba(255,255,255,0.34)",
+                fontWeight: active ? 600 : 400
+              }}>{STATE_LABELS[s]}</span>
+            )}
           </div>
         );
       })}
@@ -478,6 +526,7 @@ export default function App() {
   const [input, setInput]               = useState("");
   const [loading, setLoading]           = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState(new Set());
+  const [railCollapsed, setRailCollapsed] = useState(false);
   const chatEndRef  = useRef(null);
   const fileInputRef = useRef(null);
 
@@ -563,108 +612,214 @@ export default function App() {
   const handleOptionClick = (letter) => sendMessage(letter);
 
   /* ── Landing ─────────────────────────────────────────────── */
+  /* ── Landing ─────────────────────────────────────────────
+     Two columns: the pitch + project name on the left, a short
+     "how it works" walkthrough on the right. First-time users
+     otherwise have no idea WHAT to prepare before starting —
+     the walkthrough names the three inputs up front.
+     ───────────────────────────────────────────────────────── */
   if (!sessionId) {
+    const HOW = [
+      {
+        n: "01",
+        title: "Upload your raw data",
+        body: "The fact-level files — transactions, events, records. CSV or Excel, one or many."
+      },
+      {
+        n: "02",
+        title: "Add mapping files",
+        body: "Lookup and dimension tables that give context: products, customers, regions, dates."
+      },
+      {
+        n: "03",
+        title: "Share the protocol document",
+        body: "Your metrics in plain English. Add a DASHBOARD VISUALS section to say which charts you want."
+      },
+      {
+        n: "04",
+        title: "Download the .pbip",
+        body: "The agent writes the DAX, plans the visuals and hands back a Power BI project that opens as-is."
+      },
+    ];
+
     return (
       <div style={{
-        minHeight:560, display:"flex", alignItems:"center",
-        justifyContent:"center", padding:"48px 24px",
-        background:T.ink, fontFamily:T.sans
+        /* minHeight:100vh guarantees the dark canvas reaches the bottom of
+           the window even if an ancestor has no height set; height:100% lets
+           it shrink to a shorter frame when the portal provides one. */
+        height:"100%", minHeight:"100vh", overflowY:"auto",
+        display:"flex", alignItems:"center", justifyContent:"center",
+        padding:"48px 32px", background:T.ink, fontFamily:T.sans,
+        boxSizing:"border-box"
       }}>
-        <div style={{ width:"100%", maxWidth:440 }}>
-          <div style={{
-            fontSize:9.5, letterSpacing:"0.18em", textTransform:"uppercase",
-            color:"rgba(255,255,255,0.45)", fontFamily:T.mono, marginBottom:16
-          }}>Accenture · SynOps</div>
+        <div style={{
+          width:"100%", maxWidth:1000,
+          display:"flex", gap:96, flexWrap:"wrap",
+          alignItems:"flex-start", justifyContent:"center"
+        }}>
 
-          <h1 style={{
-            fontSize:46, fontWeight:700, lineHeight:1.05,
-            margin:"0 0 12px", color:"#fff", letterSpacing:"-0.03em"
-          }}>
-            Agentic <span style={{ color:T.purple }}>Reporting</span>
-          </h1>
+          {/* ── Left: pitch + start ───────────────────────────── */}
+          <div style={{ flex:"1 1 380px", maxWidth:460 }}>
+            <div style={{
+              fontSize:9.5, letterSpacing:"0.18em", textTransform:"uppercase",
+              color:"rgba(255,255,255,0.45)", fontFamily:T.mono, marginBottom:16
+            }}>Accenture · SynOps</div>
 
-          <p style={{
-            fontSize:19, fontWeight:600, lineHeight:1.35,
-            margin:"0 0 16px", color:"rgba(255,255,255,0.85)",
-            letterSpacing:"-0.01em"
-          }}>
-            Describe the dashboard. Get the Power BI file.
-          </p>
+            <h1 style={{
+              fontSize:46, fontWeight:700, lineHeight:1.05,
+              margin:"0 0 12px", color:"#fff", letterSpacing:"-0.03em"
+            }}>
+              Agentic <span style={{ color:T.purple }}>Reporting</span>
+            </h1>
 
-          <p style={{
-            fontSize:14, lineHeight:1.65, margin:"0 0 32px",
-            color:"rgba(255,255,255,0.6)", maxWidth:400
-          }}>
-            Upload your data and a plain-English protocol. The agent extracts
-            your measures, writes the DAX, plans the visuals and hands back a
-            ready-to-open <code style={{
-              fontFamily:T.mono, fontSize:12.5, color:"rgba(255,255,255,0.85)"
-            }}>.pbip</code> project.
-          </p>
+            <p style={{
+              fontSize:19, fontWeight:600, lineHeight:1.35,
+              margin:"0 0 16px", color:"rgba(255,255,255,0.85)",
+              letterSpacing:"-0.01em"
+            }}>
+              Describe the dashboard. Get the Power BI file.
+            </p>
 
-          <label style={{
-            display:"block", fontSize:9.5, letterSpacing:"0.1em",
-            textTransform:"uppercase", color:"rgba(255,255,255,0.45)",
-            fontFamily:T.mono, marginBottom:8
-          }} htmlFor="projectName">Project name</label>
+            <p style={{
+              fontSize:14, lineHeight:1.65, margin:"0 0 32px",
+              color:"rgba(255,255,255,0.6)", maxWidth:400
+            }}>
+              Upload your data and a plain-English protocol. The agent extracts
+              your measures, writes the DAX, plans the visuals and hands back a
+              ready-to-open <code style={{
+                fontFamily:T.mono, fontSize:12.5, color:"rgba(255,255,255,0.85)"
+              }}>.pbip</code> project.
+            </p>
 
-          <div style={{ display:"flex", gap:9 }}>
-            <input
-              id="projectName"
-              value={projectName}
-              onChange={ev => setProjectName(ev.target.value)}
-              onKeyDown={ev => ev.key==="Enter" && startProject()}
-              placeholder="Q2 Sales Performance"
-              autoFocus
-              style={{
-                flex:1, fontSize:14, padding:"11px 14px",
-                borderRadius:9, color:"#fff",
-                background:"rgba(255,255,255,0.07)",
-                border:"1px solid rgba(255,255,255,0.18)",
-                fontFamily:T.sans, outline:"none",
-                transition:"border-color .15s, box-shadow .15s"
-              }}
-              onFocus={ev => {
-                ev.target.style.borderColor = T.purple;
-                ev.target.style.boxShadow = "0 0 0 3px rgba(161,0,255,0.22)";
-              }}
-              onBlur={ev => {
-                ev.target.style.borderColor = "rgba(255,255,255,0.18)";
-                ev.target.style.boxShadow = "none";
-              }}
-            />
-            <button
-              onClick={startProject}
-              disabled={loading || !projectName.trim()}
-              style={{
-                padding:"0 22px", fontSize:13.5, fontWeight:600,
-                borderRadius:9, border:"none", cursor:"pointer",
-                background: projectName.trim() ? T.purple : "rgba(255,255,255,0.12)",
-                color: projectName.trim() ? "#fff" : "rgba(255,255,255,0.4)",
-                fontFamily:T.sans,
-                transition:"background .15s"
-              }}
-            >{loading ? "Starting…" : "Start"}</button>
+            <label style={{
+              display:"block", fontSize:9.5, letterSpacing:"0.1em",
+              textTransform:"uppercase", color:"rgba(255,255,255,0.45)",
+              fontFamily:T.mono, marginBottom:8
+            }} htmlFor="projectName">Project name</label>
+
+            <div style={{ display:"flex", gap:9 }}>
+              <input
+                id="projectName"
+                value={projectName}
+                onChange={ev => setProjectName(ev.target.value)}
+                onKeyDown={ev => ev.key==="Enter" && startProject()}
+                placeholder="Q2 Sales Performance"
+                autoFocus
+                style={{
+                  flex:1, fontSize:14, padding:"11px 14px",
+                  borderRadius:9, color:"#fff",
+                  background:"rgba(255,255,255,0.07)",
+                  border:"1px solid rgba(255,255,255,0.18)",
+                  fontFamily:T.sans, outline:"none",
+                  transition:"border-color .15s, box-shadow .15s"
+                }}
+                onFocus={ev => {
+                  ev.target.style.borderColor = T.purple;
+                  ev.target.style.boxShadow = "0 0 0 3px rgba(161,0,255,0.22)";
+                }}
+                onBlur={ev => {
+                  ev.target.style.borderColor = "rgba(255,255,255,0.18)";
+                  ev.target.style.boxShadow = "none";
+                }}
+              />
+              <button
+                onClick={startProject}
+                disabled={loading || !projectName.trim()}
+                style={{
+                  padding:"0 22px", fontSize:13.5, fontWeight:600,
+                  borderRadius:9, border:"none", cursor:"pointer",
+                  background: projectName.trim() ? T.purple : "rgba(255,255,255,0.12)",
+                  color: projectName.trim() ? "#fff" : "rgba(255,255,255,0.4)",
+                  fontFamily:T.sans,
+                  transition:"background .15s"
+                }}
+              >{loading ? "Starting\u2026" : "Start"}</button>
+            </div>
+
+            {/* Practical constraints — what to prepare and how data is
+                handled. Kept in the LEFT column so the right column stays
+                a single readable sequence of steps. */}
+            <dl style={{
+              margin:0, marginTop:30, padding:"16px 18px",
+              borderRadius:9,
+              background:"rgba(255,255,255,0.04)",
+              border:"1px solid rgba(255,255,255,0.09)",
+              display:"grid", gridTemplateColumns:"auto 1fr",
+              columnGap:16, rowGap:12
+            }}>
+              {FACTS.map(f => (
+                <React.Fragment key={f.k}>
+                  <dt style={{
+                    fontSize:9.5, letterSpacing:"0.08em", textTransform:"uppercase",
+                    color:"rgba(255,255,255,0.38)", fontFamily:T.mono,
+                    paddingTop:2, whiteSpace:"nowrap"
+                  }}>{f.k}</dt>
+                  <dd style={{
+                    margin:0, fontSize:12, lineHeight:1.55,
+                    color:"rgba(255,255,255,0.55)"
+                  }}>{f.v}</dd>
+                </React.Fragment>
+              ))}
+            </dl>
           </div>
 
-          <div style={{
-            marginTop:36, paddingTop:22,
-            borderTop:"1px solid rgba(255,255,255,0.1)",
-            display:"flex", gap:26, flexWrap:"wrap"
-          }}>
-            {["Upload data & protocol","Agent builds the model","Download .pbip"]
-              .map((s,i) => (
-              <div key={i} style={{
-                display:"flex", alignItems:"center", gap:8,
-                fontSize:11.5, color:"rgba(255,255,255,0.5)"
+          {/* ── Right: how it works ───────────────────────────── */}
+          <div style={{ flex:"1 1 340px", maxWidth:420, paddingTop:6 }}>
+            <div style={{
+              fontSize:9.5, letterSpacing:"0.14em", textTransform:"uppercase",
+              color:"rgba(255,255,255,0.4)", fontFamily:T.mono,
+              marginBottom:18, paddingBottom:12,
+              borderBottom:"1px solid rgba(255,255,255,0.1)"
+            }}>How it works</div>
+
+            {HOW.map((step, i) => (
+              <div key={step.n} style={{
+                display:"flex", gap:14, position:"relative",
+                paddingBottom: i < HOW.length - 1 ? 22 : 0
               }}>
+                {/* connector line down the numbers */}
+                {i < HOW.length - 1 && (
+                  <span style={{
+                    position:"absolute", left:13, top:26, bottom:4, width:1,
+                    background:"rgba(255,255,255,0.12)"
+                  }}/>
+                )}
                 <span style={{
-                  fontFamily:T.mono, fontSize:10, color:T.purple
-                }}>{String(i+1).padStart(2,"0")}</span>
-                {s}
+                  width:27, height:27, borderRadius:8, flexShrink:0, zIndex:1,
+                  background:"rgba(161,0,255,0.14)",
+                  border:"1px solid rgba(161,0,255,0.4)",
+                  color:T.purple, fontFamily:T.mono, fontSize:10,
+                  fontWeight:700, display:"flex",
+                  alignItems:"center", justifyContent:"center"
+                }}>{step.n}</span>
+                <div style={{ minWidth:0 }}>
+                  <div style={{
+                    fontSize:13.5, fontWeight:600, color:"#fff",
+                    marginBottom:4, letterSpacing:"-0.01em"
+                  }}>{step.title}</div>
+                  <div style={{
+                    fontSize:12.5, lineHeight:1.6,
+                    color:"rgba(255,255,255,0.52)"
+                  }}>{step.body}</div>
+                </div>
               </div>
             ))}
+
+            <div style={{
+              marginTop:30, padding:"16px 18px", borderRadius:9,
+              background:"rgba(255,255,255,0.04)",
+              border:"1px solid rgba(255,255,255,0.09)",
+              fontSize:12, lineHeight:1.6, color:"rgba(255,255,255,0.5)"
+            }}>
+              <span style={{ color:T.purple, fontFamily:T.mono, fontSize:11 }}>Tip</span>
+              {"  "}No protocol document? Say <strong style={{
+                color:"rgba(255,255,255,0.8)", fontWeight:600
+              }}>generate</strong> and the agent will propose measures from your
+              data for you to approve.
+            </div>
+
           </div>
+
         </div>
       </div>
     );
@@ -677,7 +832,12 @@ export default function App() {
   return (
     <div style={{
       display:"flex", flexDirection:"column",
-      minHeight:640, fontFamily:T.sans, color:T.text
+      /* height:100% (not 100vh) so it works standalone AND when the
+         SynOps portal embeds this in a fixed-height frame. overflow
+         hidden keeps the PAGE from scrolling — only the message list
+         scrolls, so the pipeline rail and context panel stay put. */
+      height:"100%", minHeight:0, overflow:"hidden",
+      fontFamily:T.sans, color:T.text
     }}>
       {/* Header */}
       <header style={{
@@ -704,14 +864,21 @@ export default function App() {
         </div>
       </header>
 
-      <div style={{ display:"flex", flex:1, minHeight:0 }}>
-        <PipelineRail state={state}/>
+      <div style={{ display:"flex", flex:1, minHeight:0, overflow:"hidden" }}>
+        <PipelineRail
+          state={state}
+          collapsed={railCollapsed}
+          onToggle={() => setRailCollapsed(v => !v)}
+        />
 
         {/* Conversation */}
-        <main style={{ flex:1, display:"flex", flexDirection:"column", minWidth:0 }}>
+        <main style={{
+          flex:1, display:"flex", flexDirection:"column",
+          minWidth:0, minHeight:0
+        }}>
           <div style={{
             flex:1, overflowY:"auto", padding:"22px 26px",
-            display:"flex", flexDirection:"column", minHeight:420,
+            display:"flex", flexDirection:"column", minHeight:0,
             background:T.canvas
           }}>
             {messages.length === 0 && (
