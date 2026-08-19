@@ -378,6 +378,226 @@ def extract_measures(
     return measures
 
 
+# ── Measure generation from data alone (no protocol) ───────────────────────
+
+GENERATION_SYSTEM = (
+    "You are a senior BI analyst. Given only a description of a dataset's "
+    "tables and columns, you propose the business measures a dashboard for "
+    "that data should contain. Return ONLY a JSON array — no prose, no "
+    "markdown fences."
+)
+
+GENERATION_PROMPT_TEMPLATE = """\
+A user has uploaded data but NO protocol document, so you must infer which
+measures matter from the data itself.
+
+DATA PROFILE (tables, columns, types, distinct counts):
+{profile}
+
+Propose up to {max_measures} business measures that a analyst would actually
+want for this data. Aim for genuine analytical value, not mechanical
+aggregation of every column.
+
+Rules:
+- Use ONLY table and column names that appear in the profile, verbatim.
+- NEVER aggregate a column whose role is "key" or "date" with SUM/AVG.
+  Use DISTINCTCOUNT for keys (e.g. an order id -> "Total Orders").
+- Go beyond simple sums. Include, where the data supports it:
+    * ratios          (average order value, revenue per customer)
+    * rates           (return rate, cancellation rate — use a boolean/flag column)
+    * distinct counts (unique customers, unique products)
+    * margins         (revenue minus cost, as a % where both exist)
+- Only propose time-intelligence measures (growth, running total) if a real
+  date column exists in the profile.
+- Set "confidence" honestly: 0.9+ when the column names make the meaning
+  obvious, 0.5-0.7 when you are inferring intent. Set
+  "needs_clarification": true and add "clarification_questions" for any
+  measure whose business definition is genuinely ambiguous.
+
+Return a JSON array where each item is:
+{{
+  "name": "total_net_revenue",
+  "display_name": "Total Net Revenue",
+  "description": "Sum of net revenue across all orders",
+  "aggregation": "SUM",
+  "base_table": "<table from profile>",
+  "base_column": "<column from profile>",
+  "numerator": null,
+  "denominator": null,
+  "filter_conditions": [],
+  "format_string": "$#,##0",
+  "is_kpi": true,
+  "confidence": 0.95,
+  "needs_clarification": false,
+  "clarification_questions": []
+}}
+For a ratio, set "aggregation":"RATIO" and fill numerator/denominator with
+column names. Return ONLY the JSON array."""
+
+
+def build_data_profile(raw_files, mapping_files) -> str:
+    """
+    Compact, JSON-able description of the uploaded data for the LLM.
+
+    Sends names and statistics ONLY — never row values — so generation is
+    cheap and no business data leaves the environment.
+    """
+    tables = []
+    for i, meta in enumerate(list(raw_files) + list(mapping_files)):
+        cols = []
+        for c in getattr(meta, "columns", []) or []:
+            name = c.name
+            low = name.strip().lower().replace(" ", "").replace("_", "")
+            if getattr(c, "is_date", False) or "date" in low:
+                role = "date"
+            elif getattr(c, "is_pk_candidate", False) or low.endswith("id") or low.endswith("key"):
+                role = "key"
+            elif getattr(c, "is_numeric", False):
+                role = "numeric"
+            else:
+                role = "category"
+            cols.append({
+                "name": name,
+                "role": role,
+                "dtype": str(getattr(c, "dtype", "object")),
+                "distinct": getattr(c, "unique_count", None),
+            })
+        tables.append({
+            "name": meta.table_name,
+            "role": "fact" if i == 0 else "dimension",
+            "row_count": getattr(meta, "row_count", None),
+            "columns": cols,
+        })
+    return json.dumps({"tables": tables}, indent=1, default=str)
+
+
+def generate_measures_from_data(
+    raw_files,
+    mapping_files,
+    max_measures: int = 30,
+) -> list[MeasureDefinition]:
+    """
+    Propose measures from the DATA alone, for users with no protocol document.
+
+    Returns the SAME MeasureDefinition objects as extract_measures(), so every
+    downstream stage (clarify, DAX generation, model build, visual planning)
+    works unchanged and is unaware of which path produced them. Each measure is
+    tagged source_excerpt="(generated from data profile)" so provenance is
+    visible — these are inferences, not authored definitions.
+    """
+    profile = build_data_profile(raw_files, mapping_files)
+    prompt = GENERATION_PROMPT_TEMPLATE.format(
+        profile=profile[:11000],
+        max_measures=max_measures,
+    )
+
+    raw = _call_claude(prompt, system=GENERATION_SYSTEM)
+
+    items = None
+    if raw:
+        items = _parse_measure_json(raw)
+        if items is None:
+            logger.error("Generated-measure JSON unparseable. raw_len=%d tail=%r",
+                         len(raw), raw[-300:])
+
+    if not items:
+        logger.warning("Measure generation unavailable — falling back to a "
+                       "minimal deterministic set")
+        items = _fallback_generated_measures(raw_files, mapping_files)
+    else:
+        logger.info("Generated %d measures from the data profile", len(items))
+
+    measures = []
+    for item in items[:max_measures]:
+        filters = []
+        for fc in item.get('filter_conditions') or []:
+            try:
+                filters.append(FilterCondition(
+                    column=fc.get('column', ''),
+                    operator=fc.get('operator', '='),
+                    value=fc.get('value', ''),
+                ))
+            except Exception:
+                pass
+
+        agg_str = (item.get('aggregation') or 'SUM').upper()
+        try:
+            agg = AggregationType(agg_str)
+        except ValueError:
+            agg = AggregationType.CUSTOM
+
+        measures.append(MeasureDefinition(
+            name=item.get('name', 'unnamed_measure'),
+            display_name=item.get('display_name', item.get('name', '')),
+            description=item.get('description', ''),
+            aggregation=agg,
+            numerator=item.get('numerator'),
+            denominator=item.get('denominator'),
+            base_column=item.get('base_column'),
+            base_table=item.get('base_table'),
+            filter_conditions=filters,
+            time_intelligence=item.get('time_intelligence'),
+            dimensions=item.get('dimensions') or [],
+            format_string=item.get('format_string', '#,##0'),
+            is_kpi=bool(item.get('is_kpi', False)),
+            dependencies=item.get('dependencies') or [],
+            confidence=float(item.get('confidence', 0.7)),
+            source_excerpt="(generated from data profile)",
+            needs_clarification=bool(item.get('needs_clarification', False)),
+            clarification_questions=item.get('clarification_questions') or [],
+        ))
+
+    return measures
+
+
+def _fallback_generated_measures(raw_files, mapping_files) -> list[dict]:
+    """
+    Deterministic, role-aware fallback when the LLM is unavailable.
+
+    Deliberately conservative: sums numeric NON-key columns and distinct-counts
+    the fact table's key. Never sums an id/key or a date.
+    """
+    out = []
+    files = list(raw_files)
+    if not files:
+        return out
+    fact = files[0]
+
+    for c in getattr(fact, "columns", []) or []:
+        low = c.name.strip().lower().replace(" ", "").replace("_", "")
+        is_key = (getattr(c, "is_pk_candidate", False)
+                  or low.endswith("id") or low.endswith("key"))
+        is_date = getattr(c, "is_date", False) or "date" in low
+
+        if is_key and not out:
+            out.append({
+                "name": f"total_{low}_count",
+                "display_name": "Total Records",
+                "description": f"Distinct count of {c.name}",
+                "aggregation": "DISTINCTCOUNT",
+                "base_table": fact.table_name,
+                "base_column": c.name,
+                "format_string": "#,##0",
+                "is_kpi": True,
+                "confidence": 0.6,
+            })
+        elif getattr(c, "is_numeric", False) and not is_key and not is_date:
+            out.append({
+                "name": f"total_{low}",
+                "display_name": f"Total {c.name}",
+                "description": f"Sum of {c.name}",
+                "aggregation": "SUM",
+                "base_table": fact.table_name,
+                "base_column": c.name,
+                "format_string": "#,##0",
+                "is_kpi": len(out) < 4,
+                "confidence": 0.6,
+            })
+        if len(out) >= 12:
+            break
+    return out
+
+
 # ── Conflict detection ─────────────────────────────────────────────────────
 
 def detect_protocol_conflicts(
