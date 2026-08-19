@@ -137,7 +137,9 @@ def _intake_prompt(ctx: ProjectContext, state: IntakeState) -> str:
             "metrics and measures the report needs.\n\n"
             "Any format works: Word doc, PDF, Excel, plain text, or just paste "
             "your requirements directly in chat. No template required — write it "
-            "however feels natural."
+            "however feels natural.\n\n"
+            "**Don't have a protocol document?** Say `generate` and I'll propose "
+            "measures from your data, then show them to you for approval."
         ),
         IntakeState.CLARIFY: (
             "I've read your protocol document and extracted the measures. "
@@ -514,29 +516,45 @@ def process_message(
     elif ctx.intake_state == IntakeState.PROTOCOL:
         protocol_text = ""
 
+        generate_mode = False
+
         if attached_file:
             fname, fcontent, _ = _unpack_file(attached_file)
             protocol_text = extract_protocol_text(fcontent, fname)
             ctx.protocol_file_name = fname
+        elif user_message.strip().lower() in (
+                "generate", "generate measures", "auto", "no protocol", "skip"):
+            # No protocol document — infer the measures from the data itself.
+            generate_mode = True
+            ctx.protocol_file_name = "(generated from data)"
+            ctx.protocol_text = ""
         elif len(user_message.strip()) > 30:
             protocol_text = user_message.strip()
             ctx.protocol_file_name = "pasted_protocol"
         else:
             reply = (
-                "Please upload your protocol document (Word, PDF, Excel, TXT) "
-                "or paste your requirements directly in chat."
+                "Please upload your protocol document (Word, PDF, Excel, TXT), "
+                "paste your requirements directly in chat, or say `generate` "
+                "and I'll propose measures from your data."
             )
             ctx.add_message("assistant", reply)
             return reply, ctx
-
-        ctx.protocol_text = protocol_text
 
         # Collect all known columns for context
         all_cols = []
         for meta in ctx.raw_files + ctx.mapping_files:
             all_cols.extend(c.name for c in meta.columns)
 
-        measures = extract_measures(protocol_text, all_cols)
+        if generate_mode:
+            # Same MeasureDefinition objects as the protocol path, so every
+            # downstream stage works unchanged.
+            from .protocol_parser import generate_measures_from_data
+            measures = generate_measures_from_data(
+                ctx.raw_files, ctx.mapping_files, max_measures=30)
+        else:
+            ctx.protocol_text = protocol_text
+            measures = extract_measures(protocol_text, all_cols)
+
         ctx.measures = measures
 
         conflict_errors = detect_protocol_conflicts(protocol_text, measures)
@@ -551,11 +569,21 @@ def process_message(
             for m in measures
         )
 
-        reply = (
-            f"I've analysed your protocol document and extracted "
-            f"**{len(measures)} measures**:\n\n"
-            f"{measure_summary}\n\n"
-        )
+        if generate_mode:
+            reply = (
+                f"No protocol document — so I've analysed your data and "
+                f"proposed **{len(measures)} measures**:\n\n"
+                f"{measure_summary}\n\n"
+                "These are **inferred from your column names**, not from an "
+                "authored specification — please check them before we build. "
+                "Tell me what to change, or continue to accept them.\n\n"
+            )
+        else:
+            reply = (
+                f"I've analysed your protocol document and extracted "
+                f"**{len(measures)} measures**:\n\n"
+                f"{measure_summary}\n\n"
+            )
 
         if needs_clarify:
             ctx.intake_state = IntakeState.CLARIFY
@@ -757,7 +785,11 @@ def process_message(
             if any(w in low for w in ['power bi', 'powerbi', 'pbi', 'bim', 'both', 'all']):
                 from .pbi_exporter import export_powerbi_package
                 file_paths = getattr(ctx, 'file_paths', {})
-                ctx.pbi_zip = export_powerbi_package(model, dfs, file_paths)
+                # Protocol text carries any visual requests the user wrote; the
+                # AI Visual Planner honors them (falls back to auto-layout if empty).
+                user_requests = getattr(ctx, 'protocol_text', '') or ''
+                ctx.pbi_zip = export_powerbi_package(
+                    model, dfs, file_paths, user_requests=user_requests)
                 exports_done.append("Power BI package (model.bim + .pbip + import guide)")
 
             if any(w in low for w in ['json', 'tmdl', 'both', 'all']):
