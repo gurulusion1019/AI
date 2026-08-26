@@ -835,4 +835,3 @@ def process_message(
 
     ctx.add_message("assistant", reply)
     return reply, ctx
-667
